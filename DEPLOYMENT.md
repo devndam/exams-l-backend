@@ -3,9 +3,17 @@
 This app has no SSH access on its cPanel plan, so the pipeline pushes files over
 **FTPS** and then calls a secret webhook (`POST /api/deploy/callback`) to run
 migrations and rebuild caches on the server. Everything below is a **one-time**
-manual setup; after that, every push to `main` deploys automatically.
+manual setup; after that, every push to `master` deploys automatically.
 
-## 1. Document root (do this first)
+## 1. PHP version
+
+`composer.lock` currently locks packages that require **PHP 8.4.1+** (the CI
+workflow builds with PHP 8.4). In cPanel → **MultiPHP Manager**, set this
+domain's PHP version to **8.4** (or newer) — if 8.4 isn't offered, either ask
+your host to enable it, or run `composer update` locally against whatever
+version cPanel does offer and commit the resulting `composer.lock`.
+
+## 2. Document root (do this first)
 
 Laravel must serve from the `public/` folder, not the project root. In cPanel →
 **Domains**, check whether you can set this domain/subdomain's **Document Root**
@@ -21,12 +29,12 @@ SSH — it's just a dropdown/text field, not a shell operation).
   web. Lock it down with the `.htaccess` in [Appendix A](#appendix-a-htaccess-when-the-whole-app-lives-in-public_html)
   below, and set `FTP_SERVER_DIR` to `/public_html/`.
 
-## 2. Database
+## 3. Database
 
 Create a MySQL database, user, and password in cPanel → **MySQL Databases**.
-You'll put these in the server's `.env` in step 4.
+You'll put these in the server's `.env` in step 5.
 
-## 3. Server directory structure & permissions
+## 4. Server directory structure & permissions
 
 Before the first deploy, over FTP or File Manager, create these folders (CI's
 `.gitignore` excludes them, so they won't be created by the file sync) and set
@@ -41,13 +49,13 @@ storage/logs
 bootstrap/cache
 ```
 
-## 4. Upload `.env` manually — once
+## 5. Upload `.env` manually — once
 
 CI **never** uploads `.env` (it's excluded in `deploy.yml`), so the server's
 `.env` is managed by you, by hand, and survives every deploy. Upload it once via
 File Manager or FTP, based on [.env.example](.env.example), with production
 values for `APP_ENV`, `APP_DEBUG=false`, `APP_URL`, the DB credentials from
-step 2, and a generated `DEPLOY_TOKEN`:
+step 3, and a generated `DEPLOY_TOKEN`:
 
 ```sh
 php artisan tinker --execute="echo Str::random(40);"
@@ -55,7 +63,7 @@ php artisan tinker --execute="echo Str::random(40);"
 
 Save that token — you'll add it as a GitHub secret next.
 
-## 5. GitHub repository secrets
+## 6. GitHub repository secrets
 
 In the GitHub repo → **Settings → Secrets and variables → Actions**, add:
 
@@ -64,24 +72,24 @@ In the GitHub repo → **Settings → Secrets and variables → Actions**, add:
 | `FTP_SERVER`      | Your cPanel host/IP (from cPanel → FTP Accounts)                  |
 | `FTP_USERNAME`    | An FTP account with access to the target directory                |
 | `FTP_PASSWORD`    | That FTP account's password                                       |
-| `FTP_SERVER_DIR`  | Path from step 1, e.g. `/exams-portal/` or `/public_html/`         |
+| `FTP_SERVER_DIR`  | Path from step 2, e.g. `/exams-portal/` or `/public_html/`         |
 | `APP_URL`         | The live URL, e.g. `https://api.yourdomain.com` (no trailing slash)|
-| `DEPLOY_TOKEN`    | The token generated in step 4 — must match the server's `.env`     |
+| `DEPLOY_TOKEN`    | The token generated in step 5 — must match the server's `.env`     |
 
-## 6. First deploy
+## 7. First deploy
 
-Push to `main` (or run the workflow manually via **Actions → Deploy to cPanel →
+Push to `master` (or run the workflow manually via **Actions → Deploy to cPanel →
 Run workflow**). Watch the Actions tab — the first run uploads everything and
 is slow; later runs only sync changed files.
 
 If the final "Trigger post-deploy tasks" step fails, check:
 - `DEPLOY_TOKEN` matches between the GitHub secret and the server's `.env`.
 - `APP_URL` is reachable and routes through `public/index.php` (i.e. the
-  document root is correct per step 1).
+  document root is correct per step 2).
 
 ## Appendix A: `.htaccess` when the whole app lives in `public_html`
 
-Only needed if you couldn't set a custom document root in step 1. Place this
+Only needed if you couldn't set a custom document root in step 2. Place this
 at `public_html/.htaccess` — it blocks direct access to everything except
 `public/` and lets Apache route requests into it:
 
@@ -101,4 +109,4 @@ Require all denied
 ```
 
 This is a fallback, not the preferred setup — a real document-root change
-(step 1) is simpler and harder to misconfigure.
+(step 2) is simpler and harder to misconfigure.
