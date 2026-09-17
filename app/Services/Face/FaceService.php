@@ -18,11 +18,9 @@ use App\Services\Face\Contracts\FaceEngine;
 use App\Support\Constants;
 use App\Support\FaceEmbeddingCrypto;
 use App\Support\NotificationMailer;
-use App\Support\Similarity;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Throwable;
 
 class FaceService
 {
@@ -31,11 +29,6 @@ class FaceService
         private readonly FaceEmbeddingCrypto $crypto,
         private readonly NotificationMailer $mailer,
     ) {}
-
-    private function isEmbeddingMode(): bool
-    {
-        return config('exams.face.mode') === 'embedding';
-    }
 
     private function parseImageDataUri(string $dataUri): string
     {
@@ -58,60 +51,29 @@ class FaceService
 
     // ─── Enrollment ──────────────────────────────────────────────────────────
 
-    public function enrollFace(int $candidateId, string $imageDataUri): array
+    public function enrollFace(int $candidateId, string $imageDataUri, array $embedding): array
     {
         $imageBinary = $this->parseImageDataUri($imageDataUri);
-
-        $embeddingData = null;
-
-        try {
-            if ($this->isEmbeddingMode()) {
-                $result = $this->engine->getEmbedding($imageBinary);
-                $encrypted = $this->crypto->encrypt($result->embedding);
-                $embeddingData = [
-                    'embedding_encrypted' => $encrypted['encrypted'],
-                    'embedding_iv' => $encrypted['iv'],
-                    'embedding_auth_tag' => $encrypted['authTag'],
-                    'embedding_dimension' => $result->dimension,
-                ];
-            } else {
-                $detection = $this->engine->detectFaces($imageBinary);
-                if ($detection->count === 0) {
-                    throw new \RuntimeException('No face detected');
-                }
-                if ($detection->count > 1) {
-                    throw new \RuntimeException('Multiple faces detected');
-                }
-            }
-        } catch (ApiException $e) {
-            throw $e;
-        } catch (Throwable $e) {
-            if (str_contains($e->getMessage(), 'No face')) {
-                throw new ApiException(400, 'No face detected. Please ensure your face is clearly visible.');
-            }
-            if (str_contains($e->getMessage(), 'Multiple faces')) {
-                throw new ApiException(400, 'Multiple faces detected. Please ensure only your face is in the frame.');
-            }
-            throw new ApiException(500, 'Face processing failed. Please try again.');
-        }
-
         $imageHash = hash('sha256', $imageBinary);
+
+        $encrypted = $this->crypto->encrypt($embedding);
+        $embeddingData = [
+            'embedding_encrypted' => $encrypted['encrypted'],
+            'embedding_iv' => $encrypted['iv'],
+            'embedding_auth_tag' => $encrypted['authTag'],
+            'embedding_dimension' => count($embedding),
+        ];
 
         $enrollData = array_merge([
             'capture_image' => $imageDataUri,
             'status' => 'pending',
             'reviewed_at' => null,
             'review_note' => null,
-            'embedding_encrypted' => null,
-            'embedding_iv' => null,
-            'embedding_auth_tag' => null,
-            'embedding_dimension' => null,
-        ], $embeddingData ?? []);
+        ], $embeddingData);
 
         $enrollment = FaceEnrollment::query()->updateOrCreate(['candidate_id' => $candidateId], $enrollData);
 
-        Log::info("Face enrolled for candidate {$candidateId}, mode=".config('exams.face.mode').", imageHash={$imageHash}".
-            ($embeddingData ? ", dimension={$embeddingData['embedding_dimension']}" : ''));
+        Log::info("Face enrolled for candidate {$candidateId}, imageHash={$imageHash}, dimension={$embeddingData['embedding_dimension']}");
 
         $candidate = Candidate::query()->find($candidateId);
         if ($candidate) {
@@ -127,7 +89,12 @@ class FaceService
 
     // ─── Verification ────────────────────────────────────────────────────────
 
-    public function verifyFace(int $candidateId, string $imageDataUri, ?int $sessionId = null, ?string $ipAddress = null): array
+    /**
+     * @param  array<float>  $embedding  the client-computed live embedding — accepted and validated
+     *                                    (must be 128-d) but not itself used to decide the verdict, see
+     *                                    class docblock: the client's $matched/$distance are authoritative.
+     */
+    public function verifyFace(int $candidateId, string $imageDataUri, array $embedding, bool $matched, float $distance, ?int $sessionId = null, ?string $ipAddress = null): array
     {
         $imageBinary = $this->parseImageDataUri($imageDataUri);
 
@@ -140,46 +107,41 @@ class FaceService
         }
 
         $imageHash = hash('sha256', $imageBinary);
+        $threshold = config('exams.face.verification_threshold');
 
-        if (! $this->isEmbeddingMode()) {
-            if (! $enrollment->capture_image) {
-                throw new ApiException(500, 'Enrolled face image not found. Please re-enroll.');
-            }
+        FaceVerificationLog::query()->create([
+            'candidate_id' => $candidateId,
+            'session_id' => $sessionId,
+            'similarity' => $distance,
+            'passed' => $matched,
+            'image_hash' => $imageHash,
+            'image' => $matched ? null : $imageDataUri,
+            'ip_address' => $ipAddress,
+        ]);
 
-            $enrolledBinary = $this->dataUriToBinary($enrollment->capture_image);
-            $comparison = $this->engine->compareFaces($enrolledBinary, $imageBinary);
+        Log::info("Face verify candidate={$candidateId}: distance=".round($distance, 4).", passed=".($matched ? 'true' : 'false'));
 
-            FaceVerificationLog::query()->create([
-                'candidate_id' => $candidateId,
-                'session_id' => $sessionId,
-                'similarity' => $comparison->similarity,
-                'passed' => $comparison->matched,
-                'image_hash' => $imageHash,
-                'ip_address' => $ipAddress,
-            ]);
+        return [
+            'verified' => $matched,
+            'similarity' => round(max(0, (1 - $distance) * 100), 1),
+            'distance' => round($distance, 4),
+            'threshold' => $threshold,
+            'engine' => 'client',
+        ];
+    }
 
-            Log::info(sprintf('[reference-image] Verify candidate=%d: similarity=%.2f%%, passed=%s', $candidateId, $comparison->similarity, $comparison->matched ? 'true' : 'false'));
-
-            return [
-                'verified' => $comparison->matched,
-                'similarity' => round($comparison->similarity, 1),
-                'threshold' => config('exams.face.reference_threshold', 90),
-                'engine' => 'reference-image',
-            ];
+    /**
+     * @return array{embedding: array<float>, dimension: int, threshold: float}
+     */
+    public function getReferenceEmbedding(int $candidateId): array
+    {
+        $enrollment = FaceEnrollment::query()->where('candidate_id', $candidateId)->first();
+        if (! $enrollment) {
+            throw new ApiException(404, 'Face not enrolled. Please complete face enrollment first.');
         }
-
-        try {
-            $liveEmbedding = $this->engine->getEmbedding($imageBinary)->embedding;
-        } catch (Throwable $e) {
-            if (str_contains($e->getMessage(), 'No face')) {
-                throw new ApiException(400, 'No face detected. Please look directly at the camera.');
-            }
-            if (str_contains($e->getMessage(), 'Multiple faces')) {
-                throw new ApiException(400, 'Multiple faces detected. Please ensure only you are in the frame.');
-            }
-            throw new ApiException(500, 'Face processing failed. Please try again.');
+        if ($enrollment->status !== 'approved') {
+            throw new ApiException(400, 'Face enrollment has not been approved yet.');
         }
-
         if (! $enrollment->embedding_encrypted) {
             throw new ApiException(500, 'Face embedding not found. Please re-enroll.');
         }
@@ -190,36 +152,24 @@ class FaceService
             $enrollment->embedding_auth_tag,
         );
 
-        $distance = Similarity::euclideanDistance($liveEmbedding, $storedEmbedding);
-        $threshold = config('exams.face.verification_threshold');
-        $passed = $distance <= $threshold;
-
-        FaceVerificationLog::query()->create([
-            'candidate_id' => $candidateId,
-            'session_id' => $sessionId,
-            'similarity' => $distance,
-            'passed' => $passed,
-            'image_hash' => $imageHash,
-            'ip_address' => $ipAddress,
-        ]);
-
-        Log::info("Face verify candidate={$candidateId}: distance=".round($distance, 4).", passed=".($passed ? 'true' : 'false'));
-
         return [
-            'verified' => $passed,
-            'similarity' => round(max(0, (1 - $distance) * 100), 1),
-            'distance' => round($distance, 4),
-            'threshold' => $threshold,
-            'engine' => 'embedding',
+            'embedding' => $storedEmbedding,
+            'dimension' => $enrollment->embedding_dimension,
+            'threshold' => config('exams.face.verification_threshold'),
         ];
     }
 
     // ─── Monitoring ──────────────────────────────────────────────────────────
 
-    public function processMonitoringFrame(int $candidateId, int $sessionId, string $imageDataUri, int $frameNumber): array
+    /**
+     * @param  array<float>|null  $embedding  the client-computed live embedding for this frame, present
+     *                                         only when exactly one face was detected — stored as forensic
+     *                                         evidence alongside the frame image on non-OK events, never
+     *                                         used to re-derive $eventType (the client's classification is
+     *                                         authoritative, see class docblock).
+     */
+    public function processMonitoringFrame(int $candidateId, int $sessionId, string $imageDataUri, int $frameNumber, string $eventType, ?float $distance, ?array $embedding): array
     {
-        $imageBinary = $this->parseImageDataUri($imageDataUri);
-
         $session = ExamSession::query()->find($sessionId);
         if (! $session) {
             throw new ApiException(404, 'Session not found');
@@ -236,56 +186,24 @@ class FaceService
             throw new ApiException(400, 'Face not enrolled');
         }
 
-        $eventType = Constants::FACE_EVENT_OK;
-        $similarity = null;
-        $action = 'none';
-
-        try {
-            $detection = $this->engine->detectFaces($imageBinary);
-        } catch (Throwable $e) {
-            Log::error("Monitoring frame error session={$sessionId}: {$e->getMessage()}");
-            $detection = null;
-            $eventType = Constants::FACE_EVENT_PROCESSING_ERROR;
-            $action = 'warning';
-        }
-
-        if ($detection) {
-            if ($detection->count === 0) {
-                $eventType = Constants::FACE_EVENT_NO_FACE;
-                $action = 'warning';
-            } elseif ($detection->count > 1) {
-                $eventType = Constants::FACE_EVENT_MULTIPLE_FACES;
-                $action = 'flag';
-            } elseif (! $this->isEmbeddingMode() && $enrollment->capture_image) {
-                $enrolledBinary = $this->dataUriToBinary($enrollment->capture_image);
-                $comparison = $this->engine->compareFaces($enrolledBinary, $imageBinary);
-                $similarity = $comparison->similarity;
-
-                $eventType = $comparison->matched ? Constants::FACE_EVENT_OK : Constants::FACE_EVENT_FACE_MISMATCH;
-                $action = $comparison->matched ? 'none' : 'warning';
-            } elseif ($this->isEmbeddingMode() && $enrollment->embedding_encrypted) {
-                $liveEmbedding = $detection->descriptors[0] ?? $this->engine->getEmbedding($imageBinary)->embedding;
-                $storedEmbedding = $this->crypto->decrypt(
-                    $enrollment->embedding_encrypted,
-                    $enrollment->embedding_iv,
-                    $enrollment->embedding_auth_tag,
-                );
-                $similarity = Similarity::euclideanDistance($liveEmbedding, $storedEmbedding);
-
-                $matched = $similarity <= config('exams.face.verification_threshold');
-                $eventType = $matched ? Constants::FACE_EVENT_OK : Constants::FACE_EVENT_FACE_MISMATCH;
-                $action = $matched ? 'none' : 'warning';
-            }
-        }
+        $action = match ($eventType) {
+            Constants::FACE_EVENT_OK => 'none',
+            Constants::FACE_EVENT_MULTIPLE_FACES => 'flag',
+            default => 'warning',
+        };
 
         Log::info("Monitoring session={$sessionId} candidate={$candidateId} frame={$frameNumber} event={$eventType}".
-            ($similarity !== null ? ' similarity='.round($similarity, 4) : ''));
+            ($distance !== null ? ' distance='.round($distance, 4) : ''));
+
+        $isFailure = $eventType !== Constants::FACE_EVENT_OK;
 
         FaceMonitoringEvent::query()->create([
             'session_id' => $sessionId,
             'event_type' => $eventType,
-            'similarity' => $similarity,
+            'similarity' => $distance,
             'frame_number' => $frameNumber,
+            'image' => $isFailure ? $imageDataUri : null,
+            'embedding' => $isFailure ? $embedding : null,
         ]);
 
         $warningCount = null;
@@ -299,7 +217,7 @@ class FaceService
 
         if ($action === 'terminate') {
             $reason = match ($eventType) {
-                Constants::FACE_EVENT_FACE_MISMATCH => "Exam canceled: A different face was detected repeatedly (similarity: {$similarity}). The face on camera did not match the enrolled face.",
+                Constants::FACE_EVENT_FACE_MISMATCH => "Exam canceled: A different face was detected repeatedly (distance: {$distance}). The face on camera did not match the enrolled face.",
                 Constants::FACE_EVENT_MULTIPLE_FACES => 'Exam canceled: Multiple faces were detected on camera repeatedly during the exam.',
                 default => 'Exam canceled: Face could not be detected on camera repeatedly during the exam.',
             };
@@ -311,12 +229,12 @@ class FaceService
 
         $result = [
             'eventType' => $eventType,
-            'similarity' => $similarity !== null ? round($similarity, 4) : null,
+            'similarity' => $distance !== null ? round($distance, 4) : null,
             'action' => $action,
             'warningCount' => $warningCount,
         ];
 
-        FaceMonitoringEventOccurred::dispatch($sessionId, $candidateId, $eventType, $similarity, $action, $warningCount);
+        FaceMonitoringEventOccurred::dispatch($sessionId, $candidateId, $eventType, $distance, $action, $warningCount);
 
         return $result;
     }

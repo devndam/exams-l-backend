@@ -9,7 +9,7 @@ class FaceVerificationLog extends Model
 {
     public const UPDATED_AT = null;
 
-    protected $fillable = ['candidate_id', 'session_id', 'similarity', 'passed', 'image_hash', 'ip_address'];
+    protected $fillable = ['candidate_id', 'session_id', 'similarity', 'passed', 'image_hash', 'image', 'ip_address'];
 
     protected $casts = [
         'created_at' => 'datetime',

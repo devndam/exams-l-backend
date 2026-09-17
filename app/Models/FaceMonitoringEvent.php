@@ -9,10 +9,11 @@ class FaceMonitoringEvent extends Model
 {
     public const UPDATED_AT = null;
 
-    protected $fillable = ['session_id', 'event_type', 'similarity', 'frame_number'];
+    protected $fillable = ['session_id', 'event_type', 'similarity', 'frame_number', 'image', 'embedding'];
 
     protected $casts = [
         'created_at' => 'datetime',
+        'embedding' => 'array',
     ];
 
     public function examSession(): BelongsTo

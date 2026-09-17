@@ -10,6 +10,8 @@ class EnrollFaceRequest extends ApiFormRequest
     {
         return [
             'image' => ['required', 'string', 'min:100', 'starts_with:data:image/'],
+            'embedding' => ['required', 'array', 'size:128'],
+            'embedding.*' => ['numeric'],
         ];
     }
 
@@ -18,6 +20,7 @@ class EnrollFaceRequest extends ApiFormRequest
         return [
             'image.min' => 'Image data is required',
             'image.starts_with' => 'Invalid image data URI format',
+            'embedding.size' => 'Face embedding must have exactly 128 dimensions',
         ];
     }
 }

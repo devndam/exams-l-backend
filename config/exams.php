@@ -10,21 +10,19 @@ return [
     ],
 
     'face' => [
-        // Base URL of the externally supplied face-verification service.
+        // Base URL of the externally supplied service — used only for the AWS Rekognition
+        // liveness flow and its reference-image comparison; enrollment/verification/
+        // monitoring face-matching is computed client-side (see FaceService).
         'service_url' => env('FACE_SERVICE_URL', 'http://localhost:5001'),
-        // "embedding" (service returns a comparable vector, stored encrypted) or
-        // "reference-image" (service compares images itself; we just keep the capture).
-        'mode' => env('FACE_SERVICE_MODE', 'embedding'),
         'encryption_key' => env('FACE_ENCRYPTION_KEY', ''),
-        // Euclidean distance threshold for embedding-mode verification. Verified = distance <= threshold.
+        // Euclidean distance threshold for client-side embedding verification. Matched = distance <= threshold.
         'verification_threshold' => (function () {
             $v = filter_var(env('FACE_VERIFICATION_THRESHOLD'), FILTER_VALIDATE_FLOAT);
             return $v !== false ? $v : 0.6;
         })(),
         'monitoring_interval' => (int) env('FACE_MONITORING_INTERVAL', 60),
         'max_warnings' => (int) env('FACE_MAX_WARNINGS', 5),
-        // Informational only in "reference-image" mode — the external service does its
-        // own matching and returns a `matched` boolean; this is just echoed in responses.
+        // Threshold for the liveness-flow's reference-image comparison (completeLivenessSession).
         'reference_threshold' => (float) env('FACE_REFERENCE_SIMILARITY_THRESHOLD', 90),
         'liveness_threshold' => (float) env('FACE_LIVENESS_THRESHOLD', 75),
     ],

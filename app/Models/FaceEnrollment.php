@@ -14,6 +14,11 @@ class FaceEnrollment extends Model
         'embedding_dimension', 'capture_image', 'status', 'reviewed_at', 'review_note',
     ];
 
+    // embedding_encrypted is raw ciphertext bytes (OPENSSL_RAW_DATA) — not valid UTF-8,
+    // so json_encode() throws if it's ever serialized. All three are internal storage
+    // details that should never reach an API response anyway.
+    protected $hidden = ['embedding_encrypted', 'embedding_iv', 'embedding_auth_tag'];
+
     protected $casts = [
         'enrolled_at' => 'datetime',
         'reviewed_at' => 'datetime',

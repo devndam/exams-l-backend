@@ -36,7 +36,7 @@ class SessionService
         });
     }
 
-    public function startExam(int $candidateId, int $examTypeId, ?string $liveFaceImage = null): array
+    public function startExam(int $candidateId, int $examTypeId, ?string $liveFaceImage = null, ?array $embedding = null, ?bool $matched = null, ?float $distance = null): array
     {
         $assignment = CandidateExamAssignment::query()
             ->where('candidate_id', $candidateId)->where('exam_type_id', $examTypeId)->first();
@@ -83,9 +83,12 @@ class SessionService
             if (! $liveFaceImage) {
                 throw new ApiException(400, 'Live face verification is required to start this exam. Please allow camera access.');
             }
+            if ($embedding === null || $matched === null || $distance === null) {
+                throw new ApiException(400, 'Face verification failed. Please ensure your face is clearly visible and try again.');
+            }
 
             try {
-                $verifyResult = $this->faceService->verifyFace($candidateId, $liveFaceImage);
+                $verifyResult = $this->faceService->verifyFace($candidateId, $liveFaceImage, $embedding, $matched, $distance);
             } catch (\Throwable $e) {
                 Log::warning("Pre-exam face verification failed for candidate {$candidateId}: {$e->getMessage()}");
                 throw $e;

@@ -18,7 +18,14 @@ class SessionController extends Controller
 
     public function start(int $examTypeId, StartExamRequest $request): JsonResponse
     {
-        $result = $this->sessionService->startExam($this->auth->id, $examTypeId, $request->input('liveFaceImage'));
+        $result = $this->sessionService->startExam(
+            $this->auth->id,
+            $examTypeId,
+            $request->input('liveFaceImage'),
+            $request->input('embedding'),
+            $request->input('matched'),
+            $request->input('distance'),
+        );
 
         return $this->success($result, $result['resumed'] ? 'Exam session resumed' : 'Exam started successfully', 201);
     }

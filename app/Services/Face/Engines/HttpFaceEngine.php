@@ -5,8 +5,6 @@ namespace App\Services\Face\Engines;
 use App\Exceptions\ApiException;
 use App\Services\Face\Contracts\FaceEngine;
 use App\Services\Face\DTO\ComparisonResult;
-use App\Services\Face\DTO\DetectionResult;
-use App\Services\Face\DTO\EmbeddingResult;
 use App\Services\Face\DTO\LivenessResult;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
@@ -15,12 +13,12 @@ use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 /**
- * Generic adapter for an externally hosted face-verification service. Ships as the
- * only concrete FaceEngine — point FACE_SERVICE_URL at whatever service implements
- * this contract:
+ * Adapter for an externally hosted service used only for what still needs cloud
+ * mediation: AWS Rekognition-backed liveness sessions, and comparing the liveness
+ * reference image against an enrolled photo. Enrollment/verification/monitoring
+ * face-matching is computed client-side (see FaceService) and no longer goes
+ * through this engine — point FACE_SERVICE_URL at whatever service implements:
  *
- *   POST /detect            {image}                 -> {count, descriptors?: float[][]}
- *   POST /embedding         {image}                 -> {embedding: float[], dimension}
  *   POST /compare           {imageA, imageB}        -> {similarity, matched}
  *   POST /liveness/session                          -> {sessionId}
  *   GET  /liveness/credentials                      -> {...}
@@ -50,20 +48,6 @@ class HttpFaceEngine implements FaceEngine
         $this->assertOk($response);
 
         return $response;
-    }
-
-    public function detectFaces(string $imageBinary): DetectionResult
-    {
-        $data = $this->send(fn (PendingRequest $c) => $c->post('/detect', ['image' => $this->toDataUri($imageBinary)]))->json();
-
-        return new DetectionResult((int) ($data['count'] ?? 0), $data['descriptors'] ?? []);
-    }
-
-    public function getEmbedding(string $imageBinary): EmbeddingResult
-    {
-        $data = $this->send(fn (PendingRequest $c) => $c->post('/embedding', ['image' => $this->toDataUri($imageBinary)]))->json();
-
-        return new EmbeddingResult($data['embedding'] ?? [], (int) ($data['dimension'] ?? count($data['embedding'] ?? [])));
     }
 
     public function compareFaces(string $imageABinary, string $imageBBinary): ComparisonResult

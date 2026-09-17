@@ -10,6 +10,7 @@ Route::prefix('face')->middleware(['auth.jwt', 'role:candidate'])->group(functio
     Route::post('/enroll', [FaceController::class, 'enroll'])->middleware('throttle:face');
     Route::post('/verify', [FaceController::class, 'verify'])->middleware('throttle:face');
     Route::get('/status', [FaceController::class, 'status']);
+    Route::get('/reference', [FaceController::class, 'reference'])->middleware('throttle:face');
     Route::post('/monitor', [FaceController::class, 'monitor'])->middleware('throttle:monitoring');
     Route::post('/monitor/audio', [FaceController::class, 'monitorAudio'])->middleware('throttle:monitoring');
 

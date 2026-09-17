@@ -22,14 +22,24 @@ class FaceController extends Controller
 
     public function enroll(EnrollFaceRequest $request): JsonResponse
     {
-        $result = $this->faceService->enrollFace($this->auth->id, $request->string('image')->toString());
+        $data = $request->validated();
+        $result = $this->faceService->enrollFace($this->auth->id, $data['image'], $data['embedding']);
 
         return $this->success($result, 'Face enrolled successfully', 201);
     }
 
     public function verify(VerifyFaceRequest $request): JsonResponse
     {
-        $result = $this->faceService->verifyFace($this->auth->id, $request->string('image')->toString(), null, $request->ip());
+        $data = $request->validated();
+        $result = $this->faceService->verifyFace(
+            $this->auth->id,
+            $data['image'],
+            $data['embedding'],
+            $data['matched'],
+            $data['distance'],
+            null,
+            $request->ip(),
+        );
 
         return $this->success($result, $result['verified'] ? 'Face verified successfully' : 'Face does not match enrolled face');
     }
@@ -39,10 +49,23 @@ class FaceController extends Controller
         return $this->success($this->faceService->getEnrollmentStatus($this->auth->id));
     }
 
+    public function reference(): JsonResponse
+    {
+        return $this->success($this->faceService->getReferenceEmbedding($this->auth->id));
+    }
+
     public function monitor(MonitorFrameRequest $request): JsonResponse
     {
         $data = $request->validated();
-        $result = $this->faceService->processMonitoringFrame($this->auth->id, $data['sessionId'], $data['image'], $data['frameNumber']);
+        $result = $this->faceService->processMonitoringFrame(
+            $this->auth->id,
+            $data['sessionId'],
+            $data['image'],
+            $data['frameNumber'],
+            $data['eventType'],
+            $data['distance'] ?? null,
+            $data['embedding'] ?? null,
+        );
 
         return $this->success($result);
     }
