@@ -19,6 +19,7 @@ class DeployController extends Controller
     {
         $token = (string) config('deploy.token');
 
+
         if ($token === '' || ! hash_equals($token, (string) $request->bearerToken())) {
             abort(403);
         }
