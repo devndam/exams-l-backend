@@ -1,0 +1,67 @@
+name: Deploy to cPanel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2
+          coverage: none
+
+      - name: Install PHP dependencies (production)
+        run: composer install --no-dev --optimize-autoloader --prefer-dist --no-interaction
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build frontend assets
+        run: npm run build
+
+      # No SSH on this cPanel plan, so the built app is synced over FTPS.
+      # The action diffs against the previous deploy and only uploads changes.
+      - name: Upload over FTPS
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: ${{ secrets.FTP_SERVER_DIR }}
+          protocol: ftps
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/tests/**
+            .github/**
+            .env
+            .env.*
+            storage/logs/**
+            storage/framework/cache/**
+            storage/framework/sessions/**
+            storage/framework/views/**
+            storage/framework/testing/**
+            bootstrap/cache/*.php
+
+      # Runs migrations and rebuilds Laravel's config/route/view caches on
+      # the server, since there's no shell access to run artisan directly.
+      - name: Trigger post-deploy tasks
+        run: |
+          curl -fsS -X POST "${{ secrets.APP_URL }}/api/deploy/callback" \
+            -H "Authorization: Bearer ${{ secrets.DEPLOY_TOKEN }}"
