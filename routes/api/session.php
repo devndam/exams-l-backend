@@ -9,6 +9,7 @@ Route::prefix('candidate/session')->middleware(['auth.jwt', 'role:candidate', 't
     Route::get('/{sessionId}/question', [SessionController::class, 'currentQuestion'])->whereNumber('sessionId');
     Route::post('/{sessionId}/answer', [SessionController::class, 'submitAnswer'])->whereNumber('sessionId');
     Route::get('/{sessionId}/result', [SessionController::class, 'result'])->whereNumber('sessionId');
+    Route::post('/{sessionId}/cancel', [SessionController::class, 'cancel'])->whereNumber('sessionId');
 });
 
 Route::prefix('admin/sessions')->middleware(['auth.jwt', 'role:admin'])->group(function () {

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Session\CancelSessionRequest;
 use App\Http\Requests\Session\StartExamRequest;
 use App\Http\Requests\Session\SubmitAnswerRequest;
 use App\Services\SessionService;
@@ -46,5 +47,12 @@ class SessionController extends Controller
     public function result(int $sessionId): JsonResponse
     {
         return $this->success($this->sessionService->getSessionResult($sessionId, $this->auth->id));
+    }
+
+    public function cancel(int $sessionId, CancelSessionRequest $request): JsonResponse
+    {
+        $result = $this->sessionService->cancelSession($sessionId, $this->auth->id, $request->validated('reason'));
+
+        return $this->success($result, 'Exam session canceled');
     }
 }

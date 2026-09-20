@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Events\SessionTerminated;
 use App\Exceptions\ApiException;
 use App\Models\Candidate;
 use App\Models\CandidateAnswer;
@@ -242,6 +243,43 @@ class SessionService
                 'totalQuestions' => $session->total_questions,
             ];
         });
+    }
+
+    public function cancelSession(int $sessionId, int $candidateId, string $reason): array
+    {
+        $session = ExamSession::query()->find($sessionId);
+        if (! $session) {
+            throw new ApiException(404, 'Session not found');
+        }
+        if ($session->candidate_id !== $candidateId) {
+            throw new ApiException(403, 'Access denied');
+        }
+        if ($session->completed_at) {
+            throw new ApiException(400, 'Exam already completed');
+        }
+
+        $message = match ($reason) {
+            'tab_switch' => 'Exam canceled: candidate switched tabs or windows during the exam.',
+            default => 'Exam canceled: candidate logged out while the exam was in progress.',
+        };
+
+        DB::transaction(function () use ($sessionId, $candidateId, $session, $message) {
+            $score = CandidateAnswer::query()->where('session_id', $sessionId)->where('is_correct', true)->count();
+
+            ExamSession::query()->whereKey($sessionId)->update([
+                'completed_at' => now(),
+                'score' => $score,
+                'termination_reason' => $message,
+            ]);
+
+            CandidateExamAssignment::query()
+                ->where('candidate_id', $candidateId)->where('exam_type_id', $session->exam_type_id)
+                ->update(['status' => Constants::EXAM_STATUS_CANCELED]);
+        });
+
+        SessionTerminated::dispatch($sessionId, $candidateId, $reason);
+
+        return ['canceled' => true];
     }
 
     public function getSessionResult(int $sessionId, int $candidateId): array
