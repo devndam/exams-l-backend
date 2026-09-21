@@ -24,17 +24,25 @@ class SessionService
         private readonly NotificationMailer $mailer,
     ) {}
 
-    private function completeAbandonedSession(int $sessionId, int $candidateId, int $examTypeId): void
+    private function cancelAbandonedSession(int $sessionId, int $candidateId, int $examTypeId): void
     {
-        DB::transaction(function () use ($sessionId, $candidateId, $examTypeId) {
+        $message = 'Exam canceled: candidate closed the browser or left the exam without submitting it.';
+
+        DB::transaction(function () use ($sessionId, $candidateId, $examTypeId, $message) {
             $score = CandidateAnswer::query()->where('session_id', $sessionId)->where('is_correct', true)->count();
 
-            ExamSession::query()->whereKey($sessionId)->update(['completed_at' => now(), 'score' => $score]);
+            ExamSession::query()->whereKey($sessionId)->update([
+                'completed_at' => now(),
+                'score' => $score,
+                'termination_reason' => $message,
+            ]);
 
             CandidateExamAssignment::query()
                 ->where('candidate_id', $candidateId)->where('exam_type_id', $examTypeId)
-                ->update(['status' => Constants::EXAM_STATUS_COMPLETED]);
+                ->update(['status' => Constants::EXAM_STATUS_CANCELED]);
         });
+
+        SessionTerminated::dispatch($sessionId, $candidateId, 'abandoned');
     }
 
     public function startExam(int $candidateId, int $examTypeId, ?string $liveFaceImage = null, ?array $embedding = null, ?bool $matched = null, ?float $distance = null): array
@@ -58,8 +66,8 @@ class SessionService
                 ->whereNull('completed_at')->first();
 
             if ($existingSession) {
-                $this->completeAbandonedSession($existingSession->id, $candidateId, $examTypeId);
-                throw new ApiException(400, 'Your previous session was incomplete and has been marked as completed. Please contact admin to reset the exam if needed.');
+                $this->cancelAbandonedSession($existingSession->id, $candidateId, $examTypeId);
+                throw new ApiException(400, 'Your previous session was incomplete and has been canceled. Please contact admin to reset the exam if needed.');
             }
         }
 
