@@ -32,8 +32,13 @@ class AppServiceProvider extends ServiceProvider
         Broadcast::routes(['middleware' => ['auth.jwt']]);
         require base_path('routes/channels.php');
 
+        // Authenticated routes key by candidate/admin id, not IP — otherwise every
+        // trainee behind the same exam-hall/school NAT shares one bucket and the
+        // whole room gets locked out by each other's normal exam traffic.
+        $perUserOrIp = fn (Request $request) => $request->user()?->id ? 'user:'.$request->user()->id : $request->ip();
+
         RateLimiter::for('general', fn (Request $request) => Limit::perMinutes(15, 100)
-            ->by($request->ip())
+            ->by($perUserOrIp($request))
             ->response(fn () => response()->json([
                 'success' => false,
                 'message' => 'Too many requests, please try again later',
@@ -46,22 +51,22 @@ class AppServiceProvider extends ServiceProvider
                 'message' => 'Too many login attempts, please try again later',
             ], 429)));
 
-        RateLimiter::for('exam', fn (Request $request) => Limit::perMinutes(15, 60)
-            ->by($request->ip())
+        RateLimiter::for('exam', fn (Request $request) => Limit::perMinutes(15, 120)
+            ->by($perUserOrIp($request))
             ->response(fn () => response()->json([
                 'success' => false,
                 'message' => 'Too many requests, please try again later',
             ], 429)));
 
         RateLimiter::for('face', fn (Request $request) => Limit::perMinutes(15, 20)
-            ->by($request->ip())
+            ->by($perUserOrIp($request))
             ->response(fn () => response()->json([
                 'success' => false,
                 'message' => 'Too many face verification attempts, please try again later',
             ], 429)));
 
-        RateLimiter::for('monitoring', fn (Request $request) => Limit::perMinute(5)
-            ->by($request->ip())
+        RateLimiter::for('monitoring', fn (Request $request) => Limit::perMinute(20)
+            ->by($perUserOrIp($request))
             ->response(fn () => response()->json([
                 'success' => false,
                 'message' => 'Too many monitoring requests',

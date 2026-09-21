@@ -26,6 +26,17 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
 
         $middleware->throttleApi('general');
+
+        // Our custom JWT auth isn't Laravel's built-in AuthenticatesRequests contract, so
+        // without this it's absent from Laravel's default middleware priority list and the
+        // global 'throttle:general' (part of the 'api' group) runs BEFORE it — meaning
+        // $request->user() is never set yet when the 'general' limiter's key callback runs,
+        // silently falling back to IP and re-pooling an entire shared network's traffic
+        // into one bucket. This forces auth.jwt to always run before any throttle middleware.
+        $middleware->prependToPriorityList(
+            before: \Illuminate\Routing\Middleware\ThrottleRequests::class,
+            prepend: Authenticate::class,
+        );
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
