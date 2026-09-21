@@ -8,6 +8,7 @@ use App\Http\Requests\Face\LivenessCompleteRequest;
 use App\Http\Requests\Face\LivenessSessionRequest;
 use App\Http\Requests\Face\MonitorAudioRequest;
 use App\Http\Requests\Face\MonitorFrameRequest;
+use App\Http\Requests\Face\MonitorTerminateRequest;
 use App\Http\Requests\Face\VerifyFaceRequest;
 use App\Services\Face\FaceService;
 use App\Support\AuthContext;
@@ -57,7 +58,7 @@ class FaceController extends Controller
     public function monitor(MonitorFrameRequest $request): JsonResponse
     {
         $data = $request->validated();
-        $result = $this->faceService->processMonitoringFrame(
+        $result = $this->faceService->logMonitoringFrame(
             $this->auth->id,
             $data['sessionId'],
             $data['image'],
@@ -73,9 +74,23 @@ class FaceController extends Controller
     public function monitorAudio(MonitorAudioRequest $request): JsonResponse
     {
         $data = $request->validated();
-        $result = $this->faceService->processAudioEvent($this->auth->id, $data['sessionId'], $data['eventType'], $data['decibel'] ?? null);
+        $result = $this->faceService->logAudioEvent($this->auth->id, $data['sessionId'], $data['eventType'], $data['decibel'] ?? null);
 
         return $this->success($result);
+    }
+
+    public function monitorTerminate(MonitorTerminateRequest $request): JsonResponse
+    {
+        $data = $request->validated();
+        $result = $this->faceService->terminateForViolation(
+            $this->auth->id,
+            $data['sessionId'],
+            $data['cause'],
+            $data['eventType'],
+            $data['metric'] ?? null,
+        );
+
+        return $this->success($result, 'Exam session terminated');
     }
 
     public function createLivenessSession(LivenessSessionRequest $request): JsonResponse

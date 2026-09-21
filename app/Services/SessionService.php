@@ -135,6 +135,10 @@ class SessionService
             'timePerQuestion' => $examType->time_per_question,
             'requiresFaceVerification' => $examType->requires_face_verification,
             'resumed' => false,
+            'proctoring' => [
+                'faceMaxWarnings' => config('exams.face.max_warnings'),
+                'audioMaxWarnings' => config('exams.audio.max_warnings'),
+            ],
         ];
     }
 

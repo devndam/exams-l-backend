@@ -168,7 +168,13 @@ class FaceService
      *                                         used to re-derive $eventType (the client's classification is
      *                                         authoritative, see class docblock).
      */
-    public function processMonitoringFrame(int $candidateId, int $sessionId, string $imageDataUri, int $frameNumber, string $eventType, ?float $distance, ?array $embedding): array
+    // Escalation policy (warning-count tallying and the terminate decision) now lives
+    // client-side — see FaceMonitor.vue / AudioMonitor.vue. This method only logs what
+    // the client reports, for evidence/audit and live admin visibility; it never
+    // terminates a session itself. Termination only happens through
+    // terminateForViolation(), an explicit call the client makes once its own local
+    // warning count reaches the config it was handed at session start.
+    public function logMonitoringFrame(int $candidateId, int $sessionId, string $imageDataUri, int $frameNumber, string $eventType, ?float $distance, ?array $embedding): array
     {
         $session = ExamSession::query()->find($sessionId);
         if (! $session) {
@@ -186,12 +192,6 @@ class FaceService
             throw new ApiException(400, 'Face not enrolled');
         }
 
-        $action = match ($eventType) {
-            Constants::FACE_EVENT_OK => 'none',
-            Constants::FACE_EVENT_MULTIPLE_FACES => 'flag',
-            default => 'warning',
-        };
-
         Log::info("Monitoring session={$sessionId} candidate={$candidateId} frame={$frameNumber} event={$eventType}".
             ($distance !== null ? ' distance='.round($distance, 4) : ''));
 
@@ -207,39 +207,24 @@ class FaceService
         ]);
 
         $warningCount = null;
-        if (in_array($action, ['warning', 'flag'], true)) {
+        if ($isFailure) {
             $session->increment('face_warning_count');
             $warningCount = $session->fresh()->face_warning_count;
-            if ($warningCount >= config('exams.face.max_warnings')) {
-                $action = 'terminate';
-            }
-        }
-
-        if ($action === 'terminate') {
-            $reason = match ($eventType) {
-                Constants::FACE_EVENT_FACE_MISMATCH => "Exam canceled: A different face was detected repeatedly (distance: {$distance}). The face on camera did not match the enrolled face.",
-                Constants::FACE_EVENT_MULTIPLE_FACES => 'Exam canceled: Multiple faces were detected on camera repeatedly during the exam.',
-                default => 'Exam canceled: Face could not be detected on camera repeatedly during the exam.',
-            };
-            $this->terminateSession($sessionId, $candidateId, $session->exam_type_id, $reason);
-            Log::warning("Session {$sessionId} canceled after repeated warnings: {$eventType}");
-
-            SessionTerminated::dispatch($sessionId, $candidateId, $eventType);
         }
 
         $result = [
             'eventType' => $eventType,
             'similarity' => $distance !== null ? round($distance, 4) : null,
-            'action' => $action,
             'warningCount' => $warningCount,
         ];
 
-        FaceMonitoringEventOccurred::dispatch($sessionId, $candidateId, $eventType, $distance, $action, $warningCount);
+        FaceMonitoringEventOccurred::dispatch($sessionId, $candidateId, $eventType, $distance, 'logged', $warningCount);
 
         return $result;
     }
 
-    public function processAudioEvent(int $candidateId, int $sessionId, string $eventType, ?float $decibel): array
+    // Same shift as logMonitoringFrame() above — logs only, no escalation decision.
+    public function logAudioEvent(int $candidateId, int $sessionId, string $eventType, ?float $decibel): array
     {
         $session = ExamSession::query()->find($sessionId);
         if (! $session) {
@@ -258,28 +243,56 @@ class FaceService
             'decibel' => $decibel,
         ]);
 
-        $action = 'warning';
         $session->increment('audio_warning_count');
         $warningCount = $session->fresh()->audio_warning_count;
 
-        if ($warningCount >= config('exams.audio.max_warnings')) {
-            $action = 'terminate';
+        $result = ['eventType' => $eventType, 'decibel' => $decibel, 'warningCount' => $warningCount];
 
+        AudioMonitoringEventOccurred::dispatch($sessionId, $candidateId, $eventType, $decibel, 'logged', $warningCount);
+
+        return $result;
+    }
+
+    /**
+     * Explicit termination call the client makes once its own local warning tally
+     * (against the max_warnings config it was handed at session start) reaches the
+     * limit. The client's classification/counting is trusted for the decision, but
+     * this method still re-validates session ownership/state before acting.
+     */
+    public function terminateForViolation(int $candidateId, int $sessionId, string $cause, string $eventType, ?float $metric): array
+    {
+        $session = ExamSession::query()->find($sessionId);
+        if (! $session) {
+            throw new ApiException(404, 'Session not found');
+        }
+        if ($session->candidate_id !== $candidateId) {
+            throw new ApiException(403, 'Access denied');
+        }
+        if ($session->completed_at) {
+            throw new ApiException(400, 'Session already completed');
+        }
+
+        if ($cause === 'audio') {
             $reason = $eventType === Constants::AUDIO_EVENT_VOICE_DETECTED
                 ? 'Exam canceled: Multiple voices were repeatedly detected during the exam.'
                 : 'Exam canceled: Excessive background noise was repeatedly detected during the exam.';
 
             $this->terminateSessionByAudio($sessionId, $candidateId, $session->exam_type_id, $reason);
-            Log::warning("Session {$sessionId} terminated by audio: {$eventType}, dB: {$decibel}");
+            Log::warning("Session {$sessionId} terminated by audio: {$eventType}, dB: {$metric}");
+        } else {
+            $reason = match ($eventType) {
+                Constants::FACE_EVENT_FACE_MISMATCH => "Exam canceled: A different face was detected repeatedly (distance: {$metric}). The face on camera did not match the enrolled face.",
+                Constants::FACE_EVENT_MULTIPLE_FACES => 'Exam canceled: Multiple faces were detected on camera repeatedly during the exam.',
+                default => 'Exam canceled: Face could not be detected on camera repeatedly during the exam.',
+            };
 
-            SessionTerminated::dispatch($sessionId, $candidateId, $eventType);
+            $this->terminateSession($sessionId, $candidateId, $session->exam_type_id, $reason);
+            Log::warning("Session {$sessionId} canceled after repeated warnings: {$eventType}");
         }
 
-        $result = ['eventType' => $eventType, 'decibel' => $decibel, 'action' => $action, 'warningCount' => $warningCount];
+        SessionTerminated::dispatch($sessionId, $candidateId, $eventType);
 
-        AudioMonitoringEventOccurred::dispatch($sessionId, $candidateId, $eventType, $decibel, $action, $warningCount);
-
-        return $result;
+        return ['terminated' => true, 'reason' => $reason];
     }
 
     private function terminateSession(int $sessionId, int $candidateId, int $examTypeId, string $reason): void

@@ -13,6 +13,7 @@ Route::prefix('face')->middleware(['auth.jwt', 'role:candidate'])->group(functio
     Route::get('/reference', [FaceController::class, 'reference'])->middleware('throttle:face');
     Route::post('/monitor', [FaceController::class, 'monitor'])->middleware('throttle:monitoring');
     Route::post('/monitor/audio', [FaceController::class, 'monitorAudio'])->middleware('throttle:monitoring');
+    Route::post('/monitor/terminate', [FaceController::class, 'monitorTerminate'])->middleware('throttle:monitoring');
 
     // ─── Candidate: liveness ────────────────────────────────────────────────
     Route::post('/liveness/session', [FaceController::class, 'createLivenessSession'])->middleware('throttle:face');
